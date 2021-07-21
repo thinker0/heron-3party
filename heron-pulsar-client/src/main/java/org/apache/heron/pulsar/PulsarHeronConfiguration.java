@@ -19,6 +19,7 @@
 package org.apache.heron.pulsar;
 
 import java.io.Serializable;
+import java.util.regex.Pattern;
 
 /**
  * Class used to specify pulsar storm configurations like service url and topic
@@ -36,6 +37,7 @@ public class PulsarHeronConfiguration implements Serializable {
 
     private String serviceUrl = null;
     private String topic = null;
+    private Pattern topicPattern = null;
     private int metricsTimeIntervalInSecs = DEFAULT_METRICS_TIME_INTERVAL_IN_SECS;
 
     /**
@@ -69,6 +71,23 @@ public class PulsarHeronConfiguration implements Serializable {
      */
     public void setTopic(String topic) {
         this.topic = topic;
+    }
+
+    /**
+     * @return the topic name for the producer/consumer
+     */
+    public Pattern getTopicPattern() {
+        return topicPattern;
+    }
+
+    /**
+     * Sets the topic name for the producer/consumer. It should be of the format
+     * {persistent|non-persistent}://{property}/{cluster}/{namespace}/{topic}
+     *
+     * @param topicPattern
+     */
+    public void setTopicPattern(Pattern topicPattern) {
+        this.topicPattern = topicPattern;
     }
 
     /**

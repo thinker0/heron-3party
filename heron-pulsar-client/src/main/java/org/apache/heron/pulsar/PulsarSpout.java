@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -19,6 +19,7 @@
 package org.apache.heron.pulsar;
 
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -30,10 +31,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
-
-import static com.google.common.base.Preconditions.checkNotNull;
-
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
+
 import org.apache.heron.api.metric.IMetric;
 import org.apache.heron.api.spout.BaseRichSpout;
 import org.apache.heron.api.spout.SpoutOutputCollector;
@@ -94,22 +94,25 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
     public PulsarSpout(PulsarSpoutConfiguration pulsarSpoutConf) {
         this(pulsarSpoutConf, PulsarClient.builder());
     }
-    
+
     public PulsarSpout(PulsarSpoutConfiguration pulsarSpoutConf, ClientBuilder clientBuilder) {
         this(pulsarSpoutConf, ((ClientBuilderImpl) clientBuilder).getClientConfigurationData().clone(),
                 new ConsumerConfigurationData<byte[]>());
     }
 
     public PulsarSpout(PulsarSpoutConfiguration pulsarSpoutConf, ClientConfigurationData clientConfig,
-            ConsumerConfigurationData<byte[]> consumerConfig) {
-        Objects.requireNonNull(pulsarSpoutConf.getServiceUrl());
-        Objects.requireNonNull(pulsarSpoutConf.getTopic());
-        Objects.requireNonNull(pulsarSpoutConf.getSubscriptionName());
-        Objects.requireNonNull(pulsarSpoutConf.getMessageToValuesMapper());
+                       ConsumerConfigurationData<byte[]> consumerConfig) {
+        requireNonNull(pulsarSpoutConf.getServiceUrl());
+        requireNonNull(pulsarSpoutConf.getSubscriptionName());
+        requireNonNull(pulsarSpoutConf.getMessageToValuesMapper());
+        if (Objects.nonNull(pulsarSpoutConf.getTopicPattern())
+            && Objects.nonNull((pulsarSpoutConf.getTopicPattern()))) {
+            throw new IllegalArgumentException("name or pattern of Topic");
+        }
 
-        checkNotNull(pulsarSpoutConf, "spout configuration can't be null");
-        checkNotNull(clientConfig, "client configuration can't be null");
-        checkNotNull(consumerConfig, "consumer configuration can't be null");
+        requireNonNull(pulsarSpoutConf, "spout configuration can't be null");
+        requireNonNull(clientConfig, "client configuration can't be null");
+        requireNonNull(consumerConfig, "consumer configuration can't be null");
         this.clientConf = clientConfig;
         this.clientConf.setServiceUrl(pulsarSpoutConf.getServiceUrl());
         this.consumerConf = consumerConfig;
@@ -121,17 +124,17 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
     @Override
     public void close() {
         try {
-            LOG.info("[{}] Closing Pulsar consumer for topic {}", spoutId, pulsarSpoutConf.getTopic());
-            
+            LOG.info("[{}] Closing Pulsar consumer for topic {}", spoutId, getTopicNameOrPattern());
+
             if (pulsarSpoutConf.isAutoUnsubscribe()) {
                 try {
-                    consumer.unsubscribe();    
+                    consumer.unsubscribe();
                 }catch(PulsarClientException e) {
                     LOG.error("[{}] Failed to unsubscribe {} on topic {}", spoutId,
-                            this.pulsarSpoutConf.getSubscriptionName(), pulsarSpoutConf.getTopic(), e);
+                              this.pulsarSpoutConf.getSubscriptionName(), getTopicNameOrPattern(), e);
                 }
             }
-            
+
             if (!pulsarSpoutConf.isSharedConsumerEnabled() && consumer != null) {
                 consumer.close();
             }
@@ -197,6 +200,15 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
         emitNextAvailableTuple();
     }
 
+    public String getTopicNameOrPattern() {
+        final String topicName = pulsarSpoutConf.getTopic();
+        final Pattern topicPattern = pulsarSpoutConf.getTopicPattern();
+        if (Objects.isNull(topicName) || Objects.nonNull(topicPattern)) {
+            return topicPattern.pattern();
+        }
+        return topicName;
+    }
+
     /**
      * It makes sure that it emits next available non-tuple to topology unless consumer queue doesn't have any message
      * available. It receives message from consumer queue and converts it to tuple and emits to topology. if the
@@ -205,7 +217,7 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
      */
     public void emitNextAvailableTuple() {
         // check if there are any failed messages to re-emit in the topology
-        if(emitFailedMessage()) {
+        if (emitFailedMessage()) {
             return;
         }
 
@@ -258,9 +270,9 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
 
             // messageRetries is null because messageRetries is already acked and removed from pendingMessageRetries
             // then remove it from failed message queue as well.
-            if(LOG.isDebugEnabled()) {
+            if (LOG.isDebugEnabled()) {
                 LOG.debug("[{}]-{} removing {} from failedMessage because it's already acked",
-                        pulsarSpoutConf.getTopic(), spoutId, msg.getMessageId());
+                          getTopicNameOrPattern(), spoutId, msg.getMessageId());
             }
             failedMessages.remove();
             // try to find out next failed message
@@ -279,15 +291,19 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
         failedMessages.clear();
         try {
             consumer = createConsumer();
-            LOG.info("[{}] Created a pulsar consumer on topic {} to receive messages with subscription {}", spoutId,
-                    pulsarSpoutConf.getTopic(), pulsarSpoutConf.getSubscriptionName());
+            LOG.info("[{}] Created a pulsar consumer on topic {} to receive messages with subscription {}",
+                     spoutId,
+                     getTopicNameOrPattern(), pulsarSpoutConf.getSubscriptionName());
         } catch (PulsarClientException e) {
-            LOG.error("[{}] Error creating pulsar consumer on topic {}", spoutId, pulsarSpoutConf.getTopic(), e);
+            LOG.error("[{}] Error creating pulsar consumer on topic {}", spoutId, getTopicNameOrPattern(),
+                      e);
             throw new IllegalStateException(format("Failed to initialize consumer for %s-%s : %s",
-                    pulsarSpoutConf.getTopic(), pulsarSpoutConf.getSubscriptionName(), e.getMessage()), e);
+                                                   getTopicNameOrPattern(),
+                                                   pulsarSpoutConf.getSubscriptionName(), e.getMessage()), e);
         }
-        context.registerMetric(String.format("PulsarSpout/%s-%s", componentId, context.getThisTaskIndex()), this,
-                pulsarSpoutConf.getMetricsTimeIntervalInSecs());
+        context.registerMetric(String.format("PulsarSpout/%s-%s", componentId, context.getThisTaskIndex()),
+                               this,
+                               pulsarSpoutConf.getMetricsTimeIntervalInSecs());
     }
 
     protected PulsarSpoutConsumer createConsumer() throws PulsarClientException {
@@ -295,15 +311,17 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
         PulsarSpoutConsumer consumer;
         if (pulsarSpoutConf.isSharedConsumerEnabled()) {
             consumer = pulsarSpoutConf.isDurableSubscription()
-                    ? new SpoutConsumer(sharedPulsarClient.getSharedConsumer(newConsumerConfiguration()))
-                    : new SpoutReader(sharedPulsarClient.getSharedReader(newReaderConfiguration()));
+                       ? new SpoutConsumer(sharedPulsarClient.getSharedConsumer(newConsumerConfiguration()))
+                       : new SpoutReader(sharedPulsarClient.getSharedReader(newReaderConfiguration()));
         } else {
             try {
                 consumer = pulsarSpoutConf.isDurableSubscription()
-                        ? new SpoutConsumer(sharedPulsarClient.getClient()
-                                .subscribeAsync(newConsumerConfiguration()).join())
-                        : new SpoutReader(sharedPulsarClient.getClient()
-                                .createReaderAsync(newReaderConfiguration()).join());
+                           ? new SpoutConsumer(sharedPulsarClient.getClient()
+                                                                 .subscribeAsync(newConsumerConfiguration())
+                                                                 .join())
+                           : new SpoutReader(sharedPulsarClient.getClient()
+                                                               .createReaderAsync(newReaderConfiguration())
+                                                               .join());
             } catch (CompletionException e) {
                 throw (PulsarClientException) e.getCause();
             }
@@ -415,10 +433,24 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
 
     protected ConsumerConfigurationData<byte[]> newConsumerConfiguration() {
         ConsumerConfigurationData<byte[]> consumerConf = this.consumerConf != null ? this.consumerConf
-                : new ConsumerConfigurationData<>();
-        consumerConf.setTopicNames(Collections.singleton(pulsarSpoutConf.getTopic()));
+                                                                                   :
+                                                         new ConsumerConfigurationData<>();
+        if (Objects.nonNull(pulsarSpoutConf.getTopic())) {
+            consumerConf.setTopicNames(Collections.singleton(pulsarSpoutConf.getTopic()));
+        }
+        // 1.23.0+
+        if (Objects.nonNull(pulsarSpoutConf.getTopicPattern())) {
+            consumerConf.setTopicsPattern(pulsarSpoutConf.getTopicPattern());
+            consumerConf.setAutoUpdatePartitions(true);
+        }
         consumerConf.setSubscriptionName(pulsarSpoutConf.getSubscriptionName());
         consumerConf.setSubscriptionType(pulsarSpoutConf.getSubscriptionType());
+        if (this.consumerConf != null) {
+            consumerConf.setCryptoFailureAction(consumerConf.getCryptoFailureAction());
+            consumerConf.setCryptoKeyReader(consumerConf.getCryptoKeyReader());
+            consumerConf.setReadCompacted(consumerConf.isReadCompacted());
+            consumerConf.setReceiverQueueSize(consumerConf.getReceiverQueueSize());
+        }
         return consumerConf;
     }
 
@@ -429,7 +461,7 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
             super();
             this.consumer = consumer;
         }
-        
+
         @Override
         public Message<byte[]> receive(int timeout, TimeUnit unit) throws PulsarClientException {
             return consumer.receive(timeout, unit);
