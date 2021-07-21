@@ -105,8 +105,8 @@ public class PulsarSpout extends BaseRichSpout implements IMetric {
         requireNonNull(pulsarSpoutConf.getServiceUrl());
         requireNonNull(pulsarSpoutConf.getSubscriptionName());
         requireNonNull(pulsarSpoutConf.getMessageToValuesMapper());
-        if (Objects.nonNull(pulsarSpoutConf.getTopicPattern())
-            && Objects.nonNull((pulsarSpoutConf.getTopicPattern()))) {
+        if (Objects.isNull(pulsarSpoutConf.getTopic())
+            && Objects.isNull((pulsarSpoutConf.getTopicPattern()))) {
             throw new IllegalArgumentException("name or pattern of Topic");
         }
 
